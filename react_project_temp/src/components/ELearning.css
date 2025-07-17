@@ -1,0 +1,27 @@
+.elearning-container {
+  padding: 2rem;
+  text-align: center;
+  background-color: #f4f4f4;
+  min-height: 100vh;
+}
+
+.elearning-container h1 {
+  font-size: 2rem;
+  margin-bottom: 2rem;
+  color: #222;
+}
+
+.video-grid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 2rem;
+}
+
+.video-card {
+  background: white;
+  padding: 1rem;
+  border-radius: 12px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+  width: 300px;
+}

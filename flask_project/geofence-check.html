@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Geofencing Demo</title>
+  <style>
+    #overlay {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      background: rgba(0, 0, 0, 0.8);
+      color: white;
+      display: none;
+      justify-content: center;
+      align-items: center;
+      font-size: 1.5rem;
+      z-index: 9999;
+    }
+  </style>
+</head>
+<body>
+
+<div id="dashboard">
+  <h1>Welcome to the Dashboard</h1>
+  <p>Only visible if you're in a safe zone.</p>
+</div>
+
+<div id="overlay">
+  🚫 Please move to a designated safe area to begin work.
+</div>
+
+<script>
+  // 1. Define safe zones (bounding boxes: { minLat, maxLat, minLng, maxLng })
+  const safeZones = [
+    { minLat: 40.730, maxLat: 40.740, minLng: -73.995, maxLng: -73.985 }, // Example: NYC block
+    { minLat: 34.050, maxLat: 34.060, minLng: -118.250, maxLng: -118.240 }, // Example: LA block
+  ];
+
+  // 2. Helper function: check if coordinates are inside any safe zone
+  function isInSafeZone(lat, lng) {
+    return safeZones.some(zone =>
+      lat >= zone.minLat &&
+      lat <= zone.maxLat &&
+      lng >= zone.minLng &&
+      lng <= zone.maxLng
+    );
+  }
+
+  // 3. Get current location
+  function checkLocation() {
+    if ("geolocation" in navigator) {
+      navigator.geolocation.getCurrentPosition(position => {
+        const { latitude, longitude } = position.coords;
+        const inside = isInSafeZone(latitude, longitude);
+
+        if (!inside) {
+          document.getElementById("overlay").style.display = "flex";
+          document.getElementById("dashboard").style.pointerEvents = "none";
+          document.getElementById("dashboard").style.opacity = 0.5;
+        }
+      }, error => {
+        alert("Unable to get your location. Please enable location access.");
+      });
+    } else {
+      alert("Geolocation is not supported by your browser.");
+    }
+  }
+
+  // 4. Run location check on page load
+  window.onload = checkLocation;
+</script>
+
+</body>
+</html>
