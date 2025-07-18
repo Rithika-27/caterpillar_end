@@ -2,7 +2,16 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 from pymongo import MongoClient
 from bson.objectid import ObjectId
-
+from threading import Thread
+import dlib
+from scipy.spatial import distance
+from imutils import face_utils
+import time
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import cv2
+import numpy as np
+import base64
 app = Flask(__name__)
 CORS(app)
 
@@ -103,5 +112,150 @@ def get_analytics():
     })
 
 
-if __name__ == "__main__":
+# Load face detector for helmet logic
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+
+
+@app.route('/detect_seatbelt', methods=['POST'])
+def detect_seatbelt():
+    data = request.json
+    image_data = data['image'].split(',')[1]
+    image_bytes = base64.b64decode(image_data)
+    nparr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+    # Simulate chest area (adjust depending on camera position)
+    chest_area = img[150:300, 200:450]
+    gray = cv2.cvtColor(chest_area, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 50, 150, apertureSize=3)
+    lines = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=50, minLineLength=40, maxLineGap=5)
+
+    seatbelt_detected = False
+    if lines is not None:
+        for line in lines:
+            x1, y1, x2, y2 = line[0]
+            angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
+            if 25 < abs(angle) < 65:
+                seatbelt_detected = True
+                break
+
+    return jsonify({'seatbelt_detected': seatbelt_detected})
+
+
+@app.route('/detect_helmet', methods=['POST'])
+def detect_helmet_api():
+    data = request.json
+    image_data = data['image'].split(',')[1]
+    image_bytes = base64.b64decode(image_data)
+    nparr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+    helmet_detected = detect_helmet_from_image(img)
+
+    return jsonify({'helmet_detected': helmet_detected})
+
+
+def detect_helmet_from_image(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, 1.1, 4)
+
+    for (x, y, w, h) in faces:
+        head = img[y:y + h, x:x + w]
+        if detect_helmet(head):
+            return True
+    return False
+
+
+def detect_helmet(head_img):
+    if head_img.size == 0:
+        return False
+
+    hsv = cv2.cvtColor(head_img, cv2.COLOR_BGR2HSV)
+    h, s, v = cv2.split(hsv)
+    v = cv2.equalizeHist(v)
+    hsv = cv2.merge([h, s, v])
+
+    brightness_mask = v > 80
+    saturation_mask = s > 50
+
+    mask_yellow = cv2.inRange(hsv, (20, 100, 100), (35, 255, 255))
+    mask_red1 = cv2.inRange(hsv, (0, 70, 50), (10, 255, 255))
+    mask_red2 = cv2.inRange(hsv, (170, 70, 50), (180, 255, 255))
+    mask_white = cv2.inRange(hsv, (0, 0, 200), (180, 30, 255))
+
+    combined_mask = mask_yellow | mask_red1 | mask_red2 | mask_white
+    combined_mask = cv2.bitwise_and(combined_mask, combined_mask, mask=brightness_mask.astype(np.uint8))
+    combined_mask = cv2.bitwise_and(combined_mask, combined_mask, mask=saturation_mask.astype(np.uint8))
+
+    kernel = np.ones((5, 5), np.uint8)
+    combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel)
+
+    color_ratio = np.sum(combined_mask > 0) / (combined_mask.shape[0] * combined_mask.shape[1])
+    return color_ratio > 0.06
+
+
+drowsy_status = "Not started"
+EAR_THRESHOLD = 0.25
+CONSEC_FRAMES = 20
+
+def eye_aspect_ratio(eye):
+    A = distance.euclidean(eye[1], eye[5])
+    B = distance.euclidean(eye[2], eye[4])
+    C = distance.euclidean(eye[0], eye[3])
+    return (A + B) / (2.0 * C)
+
+def start_drowsiness_monitoring():
+    global drowsy_status
+    detector = dlib.get_frontal_face_detector()
+    predictor = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")
+
+    (lStart, lEnd) = face_utils.FACIAL_LANDMARKS_IDXS["left_eye"]
+    (rStart, rEnd) = face_utils.FACIAL_LANDMARKS_IDXS["right_eye"]
+
+    cap = cv2.VideoCapture(0)
+    counter = 0
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            drowsy_status = "Camera error"
+            break
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        rects = detector(gray)
+
+        for rect in rects:
+            shape = predictor(gray, rect)
+            shape = face_utils.shape_to_np(shape)
+
+            leftEye = shape[lStart:lEnd]
+            rightEye = shape[rStart:rEnd]
+            leftEAR = eye_aspect_ratio(leftEye)
+            rightEAR = eye_aspect_ratio(rightEye)
+            ear = (leftEAR + rightEAR) / 2.0
+
+            if ear < EAR_THRESHOLD:
+                counter += 1
+                if counter >= CONSEC_FRAMES:
+                    drowsy_status = "Drowsy 😴"
+            else:
+                counter = 0
+                drowsy_status = "Awake 😊"
+
+@app.route("/start-drowsiness", methods=["GET"])
+def start_drowsiness():
+    global drowsy_status
+    drowsy_status = "Starting..."
+    thread = Thread(target=start_drowsiness_monitoring)
+    thread.daemon = True
+    thread.start()
+    return jsonify({"started": True})
+
+@app.route("/drowsiness-status", methods=["GET"])
+def get_drowsiness_status():
+    return jsonify({"status": drowsy_status})
+
+if __name__ == '__main__':
     app.run(debug=True)
+
+
